@@ -3,27 +3,23 @@ import {
   View,
   Text,
   Button,
+  Pressable,
   Image,
   Alert,
   FlatList,
   StyleSheet,
-  Platform
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import * as LocalAuthentication from 'expo-local-authentication';
 
 export default function App() {
-  const SECRET_HOUR = 3;
-  const SECRET_MINUTE = 15;
-
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [selectedTime, setSelectedTime] = useState(new Date());
-  const [showPicker, setShowPicker] = useState(true);
   const [hiddenImages, setHiddenImages] = useState<string[]>([]);
 
   const hiddenDir = FileSystem.documentDirectory + 'hidden/';
 
+  // Load hidden images from the hidden directory
   const loadHiddenImages = async () => {
     try {
       const files = await FileSystem.readDirectoryAsync(hiddenDir);
@@ -34,6 +30,7 @@ export default function App() {
     }
   };
 
+  // Pick image from gallery and hide (copy) it
   const pickAndHideImage = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
@@ -59,43 +56,73 @@ export default function App() {
     }
   };
 
-  const handleClockUnlock = () => {
-    const hour = selectedTime.getHours();
-    const minute = selectedTime.getMinutes();
+  // Delete image confirmation and delete file
+  const deleteImage = async (uri: string) => {
+    Alert.alert('Delete Image', 'Are you sure you want to delete this image?', [
+      {
+        text: 'Cancel',
+        style: 'cancel',
+      },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await FileSystem.deleteAsync(uri);
+            await loadHiddenImages();
+          } catch (error) {
+            Alert.alert('Failed to delete image');
+          }
+        },
+      },
+    ]);
+  };
 
-    if (hour === SECRET_HOUR && minute === SECRET_MINUTE) {
-      setIsAuthenticated(true);
-      loadHiddenImages();
-    } else {
-      Alert.alert('Wrong time! Try again ⏰');
+  // Biometric authentication function
+  const authenticateBiometrics = async () => {
+    try {
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      if (!hasHardware) {
+        Alert.alert('Your device does not support biometric authentication');
+        return;
+      }
+
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!isEnrolled) {
+        Alert.alert(
+          'No biometric credentials found. Please set up fingerprint or face recognition on your device.'
+        );
+        return;
+      }
+
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Authenticate to unlock',
+        fallbackLabel: 'Use Passcode',
+        cancelLabel: 'Cancel',
+      });
+
+      if (result.success) {
+        setIsAuthenticated(true);
+        loadHiddenImages();
+      } else {
+        Alert.alert('Authentication failed or cancelled');
+      }
+    } catch (e: any) {
+      Alert.alert('Authentication error', e.message);
     }
   };
 
-  // ⏰ Clock Lock Screen
+  // If not authenticated, show biometric unlock button
   if (!isAuthenticated) {
     return (
       <View style={styles.container}>
-        <Text style={styles.title}>🕒 Set the Secret Time</Text>
-
-        {showPicker && (
-          <DateTimePicker
-            value={selectedTime}
-            mode="time"
-            display={Platform.OS === 'android' ? 'clock' : 'spinner'}
-            onChange={(event, date) => {
-              if (date) setSelectedTime(date);
-            }}
-          />
-        )}
-
-        <View style={{ marginTop: 20 }}>
-          <Button title="Unlock" onPress={handleClockUnlock} />
-        </View>
+        <Text style={styles.title}>🔒 Unlock with Biometrics</Text>
+        <Button title="Unlock" onPress={authenticateBiometrics} />
       </View>
     );
   }
 
-  // ✅ Hidden Gallery View
+  // If authenticated, show hidden gallery
   return (
     <View style={styles.container}>
       <Text style={styles.title}>📂 Hidden Gallery</Text>
@@ -107,7 +134,9 @@ export default function App() {
         numColumns={2}
         contentContainerStyle={styles.grid}
         renderItem={({ item }) => (
-          <Image source={{ uri: item }} style={styles.image} />
+          <Pressable onPress={() => deleteImage(item)}>
+            <Image source={{ uri: item }} style={styles.image} />
+          </Pressable>
         )}
       />
     </View>
